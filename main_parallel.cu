@@ -14,33 +14,33 @@ const int DEFAULT_RUNS = 20;
 const int DEFAULT_THREADS = 256;
 const int DEFAULT_BLOCKS = 8;
 
-// Код взят из
-// https://developer.download.nvidia.com/assets/cuda/files/reduction.pdf
-// Очень интересная и полезная презентация
-template <unsigned int blockSize>
-__device__ void warpReduce(volatile float *sdata, int tid) {
-    if (blockSize >= 64) sdata[tid] += sdata[tid + 32];
-    if (blockSize >= 32) sdata[tid] += sdata[tid + 16];
-    if (blockSize >= 16) sdata[tid] += sdata[tid + 8];
-    if (blockSize >= 8) sdata[tid] += sdata[tid + 4];
-    if (blockSize >= 4) sdata[tid] += sdata[tid + 2];
-    if (blockSize >= 2) sdata[tid] += sdata[tid + 1];
-}
+__global__ void BitonicSortStep(float *dev_values, int j, int k)
+{
+  unsigned int i, ixj; /* Sorting partners: i and ixj */
+  i = threadIdx.x + blockDim.x * blockIdx.x;
+  ixj = i^j;
 
-template <unsigned int blockSize>
-__global__ void reduce6(float *g_idata, float *g_odata, const long int n) {
-    extern __shared__ float sdata[];
-    unsigned int tid = threadIdx.x;
-    unsigned long int i = blockIdx.x*(blockSize*2) + tid;
-    unsigned int gridSize = blockSize*2*gridDim.x;
-    sdata[tid] = 0;
-    while (i < n) { sdata[tid] += g_idata[i] + g_idata[i+blockSize]; i += gridSize; }
-    __syncthreads();
-    if (blockSize >= 512) { if (tid < 256) { sdata[tid] += sdata[tid + 256]; } __syncthreads(); }
-    if (blockSize >= 256) { if (tid < 128) { sdata[tid] += sdata[tid + 128]; } __syncthreads(); }
-    if (blockSize >= 128) { if (tid < 64) { sdata[tid] += sdata[tid + 64]; } __syncthreads(); }
-    if (tid < 32) warpReduce<blockSize>(sdata, tid);
-    if (tid == 0) g_odata[blockIdx.x] = sdata[0];
+  /* The threads with the lowest ids sort the array. */
+  if ((ixj)>i) {
+    if ((i&k)==0) {
+      /* Sort ascending */
+      if (dev_values[i]>dev_values[ixj]) {
+        /* exchange(i,ixj); */
+        float temp = dev_values[i];
+        dev_values[i] = dev_values[ixj];
+        dev_values[ixj] = temp;
+      }
+    }
+    if ((i&k)!=0) {
+      /* Sort descending */
+      if (dev_values[i]<dev_values[ixj]) {
+        /* exchange(i,ixj); */
+        float temp = dev_values[i];
+        dev_values[i] = dev_values[ixj];
+        dev_values[ixj] = temp;
+      }
+    }
+  }
 }
 
 float* CreateArray( const int SIZE) {
@@ -121,19 +121,21 @@ void CheckCudaError(cudaError_t err){
     }
 }
 
-float SumElementsOfArray(const float* array, const long int SIZE) {
-    float result = 0;
-    for (long int i = 0; i < SIZE; i++) {
-        result += array[i];
-    }
-    return result;
-}
-
 void PrintArray(const float* array, const int SIZE) {
     for (int i = 0; i < SIZE; i++) {
         printf("%f ",array[i]);
     }
     printf("\n");
+}
+
+void CheckSort(float *array, const int SIZE){
+    for (int i = 1; i < SIZE-1; i++){
+        if (array[i] > array[i+1]){
+            printf("Сортировка неверная!");
+            return;
+        }
+    }
+    printf("Сортировка верная!\n");
 }
 
 int main(int argc, char** argv) {
@@ -146,7 +148,12 @@ int main(int argc, char** argv) {
     const int RUNS = GetEnvRuns();
     const int THREADS = GetEnvThreads();
     //const int BLOCKS = GetEnvBlocks();
-    const int BLOCKS = (ARRAY_SIZE + (2 * THREADS) - 1) / (2 * THREADS);
+
+    if ((ARRAY_SIZE & (ARRAY_SIZE - 1)) != 0){
+        printf("Размер массива не является степенью 2!\n");
+        exit(EXIT_FAILURE);
+    }
+    const int BLOCKS = (ARRAY_SIZE / THREADS);
 
     printf("\n\nПараллельная программа\n");
     printf("Размер массива: %ld\n", ARRAY_SIZE);
@@ -154,8 +161,6 @@ int main(int argc, char** argv) {
     printf("Потоков в блоке: %d\n", THREADS);
     printf("Блоков (ДЛЯ ДАННОГО ЗАДАНИЯ НАСТРОЙКА КОЛ-ВА БЛОКОВ ИГНОРИРУЕТСЯ,\n\
             ПРОГРАММА САМА ВЫСЧИТАЛА НУЖНОЕ КОЛИЧЕСТВО БЛОКОВ НА ОСНОВЕ КОЛ-ВА ПОТОКОВ): %d\n", BLOCKS);
-
-    int result_array_size = (ARRAY_SIZE + (THREADS-1)) / THREADS;
     
     // Таймер
     struct timespec begin, end;
@@ -169,9 +174,6 @@ int main(int argc, char** argv) {
         float* host_float_array = NULL;
         host_float_array = CreateArray(ARRAY_SIZE);
 
-        float* host_result_float_array = NULL;
-        host_result_float_array = (float*) malloc(sizeof(float) * result_array_size);
-
         clock_gettime(CLOCK_REALTIME, &begin); // Начало таймера
 
         // Выделение глобальной памяти под массив, который будет передан GPU
@@ -179,12 +181,6 @@ int main(int argc, char** argv) {
         err = cudaMalloc(&device_float_array, ARRAY_SIZE * sizeof(float));
         CheckCudaError(err);
         printf("Глоб массив выделен\n");
-
-        // Выделение глобальной памяти под массив результат, который будет передан GPU
-        float* device_result_float_array = NULL;
-        err = cudaMalloc(&device_result_float_array, sizeof(float) * result_array_size);
-        CheckCudaError(err);
-        printf("Глоб массив результата выделен\n");
         
         //Копирование массива в GPU
         err = cudaMemcpy(device_float_array,
@@ -200,16 +196,16 @@ int main(int argc, char** argv) {
         clock_gettime(CLOCK_REALTIME, &begin); // Начало таймера
         
         // Выполнение задачи
-        switch (THREADS) {
-            case 512:
-                reduce6<512><<<BLOCKS, 512, 512 * sizeof(float)>>>(device_float_array, device_result_float_array, ARRAY_SIZE);
-                break;
-            case 256:
-                reduce6<256><<<BLOCKS, 256, 256 * sizeof(float)>>>(device_float_array, device_result_float_array, ARRAY_SIZE);
-                break;
-            case 128:
-                reduce6<128><<<BLOCKS, 128, 128 * sizeof(float)>>>(device_float_array, device_result_float_array, ARRAY_SIZE);
-                break;
+        // Алгоритм и CUDA код позаимствован из
+        // https://gist.github.com/mre/1392067
+        int j = 0;
+        int k = 0;
+        /* Major step */
+        for (k = 2; k <= ARRAY_SIZE; k <<= 1) {
+            /* Minor step */
+            for (j=k>>1; j>0; j=j>>1) {
+                BitonicSortStep<<<BLOCKS, THREADS>>>(device_float_array, j, k);
+            }
         }
         err = cudaGetLastError();
         CheckCudaError(err);
@@ -220,9 +216,9 @@ int main(int argc, char** argv) {
         clock_gettime(CLOCK_REALTIME, &begin); // Начало таймера
 
         // Берём результат от GPU
-        err = cudaMemcpy(host_result_float_array,
-                         device_result_float_array,
-                         result_array_size * sizeof(float),
+        err = cudaMemcpy(host_float_array,
+                         device_float_array,
+                         ARRAY_SIZE * sizeof(float),
                          cudaMemcpyDeviceToHost
                         );
         CheckCudaError(err);
@@ -231,25 +227,14 @@ int main(int argc, char** argv) {
         // Освобождаем глобальную память GPU
         err = cudaFree(device_float_array);
         CheckCudaError(err);
-        err = cudaFree(device_result_float_array);
-        CheckCudaError(err);
         printf("Память очищена\n");
-
-        float final_device_res = SumElementsOfArray(host_result_float_array, result_array_size);
 
         clock_gettime(CLOCK_REALTIME, &end); // Конец таймера
         data_allocation_time += (double)(end.tv_sec - begin.tv_sec) + (double)(end.tv_nsec - begin.tv_nsec)/1e9;
         
-        //PrintArray(host_result_float_array, result_array_size);
-        //FIXME почему-то финальный результат суммы хоста упирается в 32битный инт
-        float final_host_res = SumElementsOfArray(host_float_array, ARRAY_SIZE);
-        float diff = final_host_res - final_device_res;
-        printf("Погрешность между вычислением на CPU и GPU (CPU - GPU): %f\n", diff);
-        printf("сумма на CPU %f\n", final_host_res);
-        printf("сумма на GPU %f\n", final_device_res);
+        CheckSort(host_float_array, ARRAY_SIZE);
 
         free(host_float_array);
-        free(host_result_float_array);
     }
 
     double mean_data_alloc_time = data_allocation_time / RUNS;

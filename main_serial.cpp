@@ -142,6 +142,8 @@ int main(int argc, char **argv) {
 
     clock_gettime(CLOCK_REALTIME, &begin); // Начало таймера
 
+    // Код позаимствован из
+    // https://github.com/nickjillings/bitonic-sort/blob/master/BitonicSort.cpp
     BitonicSort(float_array, ARRAY_SIZE);
 
     clock_gettime(CLOCK_REALTIME, &end); // Конец таймера
