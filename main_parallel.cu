@@ -9,8 +9,8 @@
 #include <cuda_runtime.h>
 //#include <stdbool.h>
 
-const long int DEFAULT_ARRAY_SIZE = 100000000;
-const int DEFAULT_RUNS = 20;
+const long int DEFAULT_ARRAY_SIZE = 134217728;
+const int DEFAULT_RUNS = 2;
 const int DEFAULT_THREADS = 256;
 const int DEFAULT_BLOCKS = 8;
 
