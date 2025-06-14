@@ -180,7 +180,7 @@ int main(int argc, char** argv) {
         float* device_float_array = NULL;
         err = cudaMalloc(&device_float_array, ARRAY_SIZE * sizeof(float));
         CheckCudaError(err);
-        printf("Глоб массив выделен\n");
+        //printf("Глоб массив выделен\n");
         
         //Копирование массива в GPU
         err = cudaMemcpy(device_float_array,
@@ -189,14 +189,14 @@ int main(int argc, char** argv) {
                          cudaMemcpyHostToDevice
                         );
         CheckCudaError(err);
-        printf("Глоб массив скопирован\n");
+        //printf("Глоб массив скопирован\n");
 
         clock_gettime(CLOCK_REALTIME, &end); // Конец таймера
         data_allocation_time += (double)(end.tv_sec - begin.tv_sec) + (double)(end.tv_nsec - begin.tv_nsec)/1e9;
         clock_gettime(CLOCK_REALTIME, &begin); // Начало таймера
         
         // Выполнение задачи
-        // Алгоритм и CUDA код позаимствован из
+        // CUDA код позаимствован из
         // https://gist.github.com/mre/1392067
         int j = 0;
         int k = 0;
@@ -209,7 +209,7 @@ int main(int argc, char** argv) {
         }
         err = cudaGetLastError();
         CheckCudaError(err);
-        printf("Задача выполнена\n");
+        //printf("Задача выполнена\n");
 
         clock_gettime(CLOCK_REALTIME, &end); // Конец таймера
         exec_time += (double)(end.tv_sec - begin.tv_sec) + (double)(end.tv_nsec - begin.tv_nsec)/1e9;
@@ -222,12 +222,12 @@ int main(int argc, char** argv) {
                          cudaMemcpyDeviceToHost
                         );
         CheckCudaError(err);
-        printf("Результат получен\n");
+        //printf("Результат получен\n");
         
         // Освобождаем глобальную память GPU
         err = cudaFree(device_float_array);
         CheckCudaError(err);
-        printf("Память очищена\n");
+        //printf("Память очищена\n");
 
         clock_gettime(CLOCK_REALTIME, &end); // Конец таймера
         data_allocation_time += (double)(end.tv_sec - begin.tv_sec) + (double)(end.tv_nsec - begin.tv_nsec)/1e9;
